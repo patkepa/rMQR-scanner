@@ -6,9 +6,11 @@ decoder's raw `bytes` buffer, hexadecimal, Base64URL, decoded text, and parsed
 device fields.
 
 For PWM/row-scanned LED panels, the live scanner combines the brightest pixel
-from four consecutive camera frames before decoding. This restores LED rows
-that a rolling-shutter camera captured while they were off. Keep the phone
-still for about one second while it collects the frames.
+from eight consecutive camera frames, then tries multiple threshold methods on
+both the full frame and a smoothed downsample. This restores LED rows that a
+rolling-shutter camera captured while they were off and reduces visible LED-dot
+spacing. Step back until individual LEDs merge, zoom to frame the symbol, and
+hold the phone still for about one second while it collects the frames.
 
 ## device format
 

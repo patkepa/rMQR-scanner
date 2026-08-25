@@ -17,9 +17,14 @@ const decodedFields = document.querySelector("#decoded-fields");
 
 const scanCanvas = document.createElement("canvas");
 const scanContext = scanCanvas.getContext("2d", { willReadFrequently: true });
+const recoverySourceCanvas = document.createElement("canvas");
+const recoverySourceContext = recoverySourceCanvas.getContext("2d", { willReadFrequently: true });
+const recoveryCanvas = document.createElement("canvas");
+const recoveryContext = recoveryCanvas.getContext("2d", { willReadFrequently: true });
 const textDecoder = new TextDecoder("utf-8", { fatal: false });
 const textEncoder = new TextEncoder();
-const TEMPORAL_FRAME_COUNT = 4;
+const TEMPORAL_FRAME_COUNT = 8;
+const LED_FRAME_INTERVAL_MS = 75;
 const readerOptions = {
   formats: ["RMQRCode"],
   tryHarder: true,
@@ -29,6 +34,11 @@ const readerOptions = {
   maxNumberOfSymbols: 1,
   binarizer: "LocalAverage",
 };
+const ledReaderOptions = [
+  { ...readerOptions, tryDenoise: false, binarizer: "LocalAverage" },
+  { ...readerOptions, tryDenoise: false, binarizer: "GlobalHistogram" },
+  { ...readerOptions, tryDenoise: true, binarizer: "LocalAverage" },
+];
 
 let stream;
 let scanning = false;
@@ -208,10 +218,39 @@ function showResult(result) {
   navigator.vibrate?.(35);
 }
 
-async function decodeInput(input) {
-  const results = await readBarcodes(input, readerOptions);
+async function decodeInput(input, options = readerOptions) {
+  const results = await readBarcodes(input, options);
   if (results.length > 0) showResult(results[0]);
   return results.length > 0;
+}
+
+function downsampleLedFrame(frame, scale) {
+  recoverySourceCanvas.width = frame.width;
+  recoverySourceCanvas.height = frame.height;
+  recoverySourceContext.putImageData(frame, 0, 0);
+  recoveryCanvas.width = Math.max(1, Math.round(frame.width * scale));
+  recoveryCanvas.height = Math.max(1, Math.round(frame.height * scale));
+  recoveryContext.imageSmoothingEnabled = true;
+  recoveryContext.imageSmoothingQuality = "high";
+  recoveryContext.drawImage(recoverySourceCanvas,
+                            0,
+                            0,
+                            recoveryCanvas.width,
+                            recoveryCanvas.height);
+  return recoveryContext.getImageData(0,
+                                      0,
+                                      recoveryCanvas.width,
+                                      recoveryCanvas.height);
+}
+
+async function decodeLedFrame(frame) {
+  const candidates = [frame, downsampleLedFrame(frame, 0.7)];
+  for (const candidate of candidates) {
+    for (const options of ledReaderOptions) {
+      if (await decodeInput(candidate, options)) return true;
+    }
+  }
+  return false;
 }
 
 function resetTemporalFrame() {
@@ -264,14 +303,14 @@ function cameraFrame() {
     scanBusy = false;
     return;
   }
-  decodeInput(combinedFrame)
+  decodeLedFrame(combinedFrame)
     .catch(() => undefined)
     .finally(() => { scanBusy = false; });
 }
 
 function startScanLoop() {
   window.clearInterval(scanTimer);
-  scanTimer = window.setInterval(cameraFrame, 180);
+  scanTimer = window.setInterval(cameraFrame, LED_FRAME_INTERVAL_MS);
 }
 
 async function startCamera() {
@@ -284,7 +323,12 @@ async function startCamera() {
   try {
     await prepareZXingModule({ fireImmediately: true });
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 60, min: 30 },
+      },
       audio: false,
     });
     camera.srcObject = stream;
