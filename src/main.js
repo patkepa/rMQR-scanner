@@ -1,0 +1,255 @@
+import { prepareZXingModule, readBarcodes } from "zxing-wasm/reader";
+import "./style.css";
+
+const camera = document.querySelector("#camera");
+const imageInput = document.querySelector("#image-input");
+const startCameraButton = document.querySelector("#start-camera");
+const cameraStatus = document.querySelector("#camera-status");
+const resultStatus = document.querySelector("#result-status");
+const packetStatus = document.querySelector("#packet-status");
+const cameraEmpty = document.querySelector("#camera-empty");
+const resultEmpty = document.querySelector("#result-empty");
+const resultContent = document.querySelector("#result-content");
+const textOutput = document.querySelector("#text-output");
+const hexOutput = document.querySelector("#hex-output");
+const base64Output = document.querySelector("#base64-output");
+const decodedFields = document.querySelector("#decoded-fields");
+
+const scanCanvas = document.createElement("canvas");
+const scanContext = scanCanvas.getContext("2d", { willReadFrequently: true });
+const textDecoder = new TextDecoder("utf-8", { fatal: false });
+const textEncoder = new TextEncoder();
+const readerOptions = {
+  formats: ["RMQRCode"],
+  tryHarder: true,
+  tryRotate: true,
+  tryInvert: true,
+  tryDenoise: true,
+  maxNumberOfSymbols: 1,
+  binarizer: "LocalAverage",
+};
+
+let stream;
+let scanning = false;
+let scanBusy = false;
+let scanTimer;
+let lastPayload = "";
+
+function setStatus(element, text, tone = "idle") {
+  element.textContent = text;
+  element.className = `status ${tone}`;
+}
+
+function setCameraStatus(text, tone) {
+  setStatus(cameraStatus, text, tone);
+}
+
+function base64Url(bytes) {
+  let binary = "";
+  for (const value of bytes) binary += String.fromCharCode(value);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function hex(bytes) {
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0").toUpperCase())
+    .reduce((lines, value, index) => {
+      const line = Math.floor(index / 12);
+      lines[line] ??= [];
+      lines[line].push(value);
+      return lines;
+    }, [])
+    .map((line) => line.join(" "))
+    .join("\n");
+}
+
+function visibleText(text, bytes) {
+  if (/^[\x20-\x7E\r\n\t]*$/.test(text)) return text || "(empty text payload)";
+  return `[Binary payload: ${bytes.length} bytes — see hexadecimal and Base64URL]`;
+}
+
+function crc16CcittFalse(bytes) {
+  let crc = 0xffff;
+  for (const value of bytes) {
+    crc ^= value << 8;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+  }
+  return crc;
+}
+
+function decodeBase64Url(value) {
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) return null;
+  const padded = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  try {
+    const binary = atob(padded);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+function readLe24(bytes, offset) {
+  return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+}
+
+function readLe32(bytes, offset) {
+  return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+}
+
+function displayPacket(bytes) {
+  const maybeText = textDecoder.decode(bytes);
+  const raw = bytes.length === 37 ? bytes : decodeBase64Url(maybeText);
+  if (!raw || raw.length !== 37 || raw[0] !== 1 || raw[1] > 16) return null;
+
+  const expectedCrc = raw[35] | (raw[36] << 8);
+  const actualCrc = crc16CcittFalse(raw.subarray(0, 35));
+  const state = readLe32(raw, 18);
+  const firmware = Array.from(raw.subarray(32, 35), (part) => part === 255 ? "unavailable" : part === 254 ? "overflow" : String(part)).join(".");
+  const rssi = raw[26] > 127 ? raw[26] - 256 : raw[26];
+  return {
+    crcValid: actualCrc === expectedCrc,
+    fields: [
+      ["Format version", raw[0]],
+      ["Device name", textDecoder.decode(raw.subarray(2, 2 + raw[1])) || "—"],
+      ["State flags", `0x${state.toString(16).padStart(8, "0").toUpperCase()}`],
+      ["Main state", state & 0x0f],
+      ["Secondary states", `0x${((state >>> 4) & 0x1ff).toString(16).toUpperCase()}`],
+      ["Display-image flags", `0x${((state >>> 13) & 0x7ff).toString(16).toUpperCase()}`],
+      ["Previous screen", (state >>> 24) & 0x0f],
+      ["Wi-Fi / cloud / custom text", `${(state & (1 << 28)) !== 0 ? "connected" : "off"} / ${(state & (1 << 29)) !== 0 ? "connected" : "off"} / ${(state & (1 << 30)) !== 0 ? "enabled" : "off"}`],
+      ["IPv4 address", Array.from(raw.subarray(22, 26)).join(".")],
+      ["Wi-Fi RSSI", rssi === -128 ? "unavailable" : `${rssi} dBm`],
+      ["Uptime", `${readLe24(raw, 27).toLocaleString()} minutes`],
+      ["Free heap", `${(raw[30] | (raw[31] << 8)).toLocaleString()} KiB`],
+      ["Firmware", firmware],
+      ["CRC-16 / CCITT-FALSE", `0x${expectedCrc.toString(16).padStart(4, "0").toUpperCase()} · ${actualCrc === expectedCrc ? "valid" : "invalid"}`],
+    ],
+  };
+}
+
+function showPacket(bytes) {
+  const packet = displayPacket(bytes);
+  decodedFields.replaceChildren();
+  if (!packet) {
+    setStatus(packetStatus, "Not a device v1 packet", "idle");
+    const detail = document.createElement("p");
+    detail.className = "packet-note";
+    detail.textContent = "The raw bytes are preserved above. device parsing expects a 37-byte packet or its 50-character Base64URL representation.";
+    decodedFields.append(detail);
+    return;
+  }
+  setStatus(packetStatus, packet.crcValid ? "CRC valid" : "CRC invalid", packet.crcValid ? "success" : "error");
+  for (const [label, value] of packet.fields) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    decodedFields.append(term, description);
+  }
+}
+
+function showResult(result) {
+  const bytes = result.bytes instanceof Uint8Array ? result.bytes : textEncoder.encode(result.text ?? "");
+  const payloadKey = base64Url(bytes);
+  if (payloadKey === lastPayload) return;
+  lastPayload = payloadKey;
+  textOutput.textContent = visibleText(result.text ?? textDecoder.decode(bytes), bytes);
+  hexOutput.textContent = hex(bytes);
+  base64Output.textContent = payloadKey;
+  showPacket(bytes);
+  resultEmpty.hidden = true;
+  resultContent.hidden = false;
+  setStatus(resultStatus, `${result.format} · ${bytes.length} bytes`, "success");
+  setCameraStatus("rMQR decoded", "success");
+  navigator.vibrate?.(35);
+}
+
+async function decodeInput(input) {
+  const results = await readBarcodes(input, readerOptions);
+  if (results.length > 0) showResult(results[0]);
+  return results.length > 0;
+}
+
+function cameraFrame() {
+  if (!scanning || scanBusy || camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  const sourceWidth = camera.videoWidth;
+  const sourceHeight = camera.videoHeight;
+  if (!sourceWidth || !sourceHeight) return;
+  scanBusy = true;
+  const scale = Math.min(1, 960 / Math.max(sourceWidth, sourceHeight));
+  scanCanvas.width = Math.max(1, Math.floor(sourceWidth * scale));
+  scanCanvas.height = Math.max(1, Math.floor(sourceHeight * scale));
+  scanContext.drawImage(camera, 0, 0, scanCanvas.width, scanCanvas.height);
+  decodeInput(scanContext.getImageData(0, 0, scanCanvas.width, scanCanvas.height))
+    .catch(() => undefined)
+    .finally(() => { scanBusy = false; });
+}
+
+function startScanLoop() {
+  window.clearInterval(scanTimer);
+  scanTimer = window.setInterval(cameraFrame, 180);
+}
+
+async function startCamera() {
+  if (stream) {
+    stopCamera();
+    return;
+  }
+  startCameraButton.disabled = true;
+  setCameraStatus("Preparing decoder…", "idle");
+  try {
+    await prepareZXingModule({ fireImmediately: true });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    camera.srcObject = stream;
+    await camera.play();
+    scanning = true;
+    cameraEmpty.hidden = true;
+    startCameraButton.innerHTML = "<span aria-hidden=\"true\">■</span> Stop camera";
+    setCameraStatus("Scanning rMQR", "active");
+    startScanLoop();
+  } catch (error) {
+    setCameraStatus("Camera unavailable", "error");
+    resultEmpty.hidden = false;
+    resultEmpty.querySelector("p").textContent = error.name === "NotAllowedError" ? "Camera access was denied. You can still upload an image." : "The camera could not be started. You can still upload an image.";
+  } finally {
+    startCameraButton.disabled = false;
+  }
+}
+
+function stopCamera() {
+  scanning = false;
+  window.clearInterval(scanTimer);
+  stream?.getTracks().forEach((track) => track.stop());
+  stream = undefined;
+  camera.srcObject = null;
+  cameraEmpty.hidden = false;
+  startCameraButton.innerHTML = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 7h3l1.2-2h9.6L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm9 3a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z\"/></svg>Start camera";
+  setCameraStatus("Camera off", "idle");
+}
+
+async function decodeFile(file) {
+  if (!file) return;
+  setStatus(resultStatus, "Reading image…", "idle");
+  try {
+    await prepareZXingModule({ fireImmediately: true });
+    if (!(await decodeInput(file))) setStatus(resultStatus, "No rMQR found", "error");
+  } catch {
+    setStatus(resultStatus, "Could not read image", "error");
+  }
+}
+
+startCameraButton.addEventListener("click", startCamera);
+imageInput.addEventListener("change", (event) => decodeFile(event.target.files?.[0]));
+document.querySelectorAll(".copy-button").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const output = document.querySelector(`#${button.dataset.copy}`);
+    await navigator.clipboard.writeText(output.textContent);
+    const label = button.textContent;
+    button.textContent = "Copied";
+    window.setTimeout(() => { button.textContent = label; }, 1400);
+  });
+});
+
+window.addEventListener("beforeunload", stopCamera);

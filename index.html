@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#092247" />
+    <meta name="description" content="Scan rMQR diagnostic codes and inspect their binary payloads." />
+    <title>rMQR Binary Scanner</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="./" aria-label="rMQR Binary Scanner home">
+          <svg class="brand-mark" viewBox="0 0 56 56" aria-hidden="true"><path d="M4 4h18v18H4zM10 10v6h6v-6zm24-6h18v18H34zm6 6v6h6v-6zM4 34h18v18H4zm6 6v6h6v-6zm22-6h7v7h-7zm12 0h8v8h-8zm-12 12h8v6h-8zm12 0h8v6h-8z"/></svg>
+          <span><strong>rMQR Binary Scanner</strong><small>Scan rMQR codes and inspect binary payloads</small></span>
+        </a>
+        <a class="github-link" href="https://github.com/patkepa/rMQR-scanner" target="_blank" rel="noreferrer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.1.68-.22.68-.48v-1.7c-2.78.6-3.37-1.18-3.37-1.18-.46-1.16-1.12-1.47-1.12-1.47-.91-.63.07-.62.07-.62 1.01.07 1.54 1.04 1.54 1.04.9 1.54 2.36 1.1 2.93.84.09-.65.35-1.1.63-1.35-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02A9.5 9.5 0 0 1 12 6.8c.85 0 1.7.11 2.5.34 1.91-1.3 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.91.68 1.83v2.71c0 .27.18.59.69.48A10 10 0 0 0 12 2Z"/></svg>
+          GitHub
+        </a>
+      </header>
+
+      <section class="scanner-grid" aria-label="rMQR scanner">
+        <section class="camera-panel" aria-labelledby="camera-heading">
+          <div class="panel-heading"><h1 id="camera-heading">Live camera</h1><span id="camera-status" class="status idle">Camera off</span></div>
+          <div class="video-wrap">
+            <video id="camera" playsinline muted></video>
+            <div id="scan-guide" class="scan-guide" aria-hidden="true"><i></i><i></i><i></i><i></i><span>Align the rMQR inside this frame</span></div>
+            <div id="camera-empty" class="camera-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.2-2h7.6L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm8 3.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Zm0 1.8a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/></svg><p>Start the camera to scan an rMQR code.</p></div>
+          </div>
+          <div class="camera-actions">
+            <button id="start-camera" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3l1.2-2h9.6L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm9 3a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/></svg>Start camera</button>
+            <label class="button secondary" for="image-input"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0-11 4 4m-4-4L8 7M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg>Upload image</label>
+            <input id="image-input" type="file" accept="image/*" hidden />
+          </div>
+          <p class="camera-tip">For LED panels, keep the camera square to the display and let it focus before scanning.</p>
+        </section>
+
+        <section class="result-panel" aria-labelledby="result-heading">
+          <div class="panel-heading"><h2 id="result-heading">Decoded result</h2><span id="result-status" class="status idle" aria-live="polite">Waiting for a code</span></div>
+          <div id="result-empty" class="result-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h5v2H7v3H5V4Zm9 0h5v5h-2V6h-3V4ZM5 15h2v3h3v2H5v-5Zm12 0h2v5h-5v-2h3v-3ZM8 8h8v8H8V8Z"/></svg><p>Decoded rMQR data will appear here.</p><small>The scanner preserves the decoder’s raw byte buffer before presenting it as text.</small></div>
+          <div id="result-content" hidden>
+            <section class="result-section"><div class="section-label"><h3>Text value</h3><button class="copy-button" data-copy="text-output">Copy</button></div><pre id="text-output" class="output text-output"></pre></section>
+            <section class="result-section"><div class="section-label"><h3>Raw bytes · hexadecimal</h3><button class="copy-button" data-copy="hex-output">Copy</button></div><pre id="hex-output" class="output hex-output"></pre></section>
+            <section class="result-section"><div class="section-label"><h3>Base64URL · no padding</h3><button class="copy-button" data-copy="base64-output">Copy</button></div><pre id="base64-output" class="output"></pre></section>
+            <section class="result-section decoded-section"><div class="section-label"><h3>device diagnostic packet</h3><span id="packet-status" class="status idle">No packet</span></div><dl id="decoded-fields" class="decoded-fields"></dl></section>
+          </div>
+        </section>
+      </section>
+
+      <footer>rMQR decoding runs entirely in this browser using ZXing-C++ WebAssembly. Camera frames and payloads are never uploaded.</footer>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
