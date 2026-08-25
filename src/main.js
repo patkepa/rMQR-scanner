@@ -128,7 +128,7 @@ function readLe32(bytes, offset) {
   return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
 }
 
-function displayPacket(bytes) {
+function displayFlagsPacket(bytes) {
   const maybeText = textDecoder.decode(bytes);
   const displayFlags = decodeBase45DisplayFlags(maybeText);
   if (displayFlags) {
@@ -182,13 +182,13 @@ function displayPacket(bytes) {
 }
 
 function showPacket(bytes) {
-  const packet = displayPacket(bytes);
+  const packet = displayFlagsPacket(bytes);
   decodedFields.replaceChildren();
   if (!packet) {
-    setStatus(packetStatus, "Not a device packet", "idle");
+    setStatus(packetStatus, "Not a recognized display packet", "idle");
     const detail = document.createElement("p");
     detail.className = "packet-note";
-    detail.textContent = "The raw bytes are preserved above. device parsing expects the six-character Base45 display-flags payload; legacy 37-byte and 50-character Base64URL packets are also supported.";
+    detail.textContent = "The raw bytes are preserved above. Display parsing expects the six-character Base45 flags payload; legacy 37-byte and 50-character Base64URL packets are also supported.";
     decodedFields.append(detail);
     return;
   }
