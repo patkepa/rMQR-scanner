@@ -92,6 +92,24 @@ function decodeBase64Url(value) {
   }
 }
 
+function decodeBase45DisplayFlags(value) {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+  if (value.length !== 6) return null;
+  const bytes = new Uint8Array(4);
+  for (let pair = 0; pair < 2; pair += 1) {
+    const offset = pair * 3;
+    const first = alphabet.indexOf(value[offset]);
+    const second = alphabet.indexOf(value[offset + 1]);
+    const third = alphabet.indexOf(value[offset + 2]);
+    if (first < 0 || second < 0 || third < 0) return null;
+    const decoded = first + second * 45 + third * 45 * 45;
+    if (decoded > 0xffff) return null;
+    bytes[pair * 2] = decoded & 0xff;
+    bytes[pair * 2 + 1] = decoded >>> 8;
+  }
+  return bytes;
+}
+
 function readLe24(bytes, offset) {
   return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
 }
@@ -102,6 +120,27 @@ function readLe32(bytes, offset) {
 
 function displayPacket(bytes) {
   const maybeText = textDecoder.decode(bytes);
+  const displayFlags = decodeBase45DisplayFlags(maybeText);
+  if (displayFlags) {
+    const state = readLe32(displayFlags, 0);
+    return {
+      statusText: "Display flags decoded",
+      statusTone: "success",
+      fields: [
+        ["Payload format", "High-reliability display flags · Base45"],
+        ["Encoded payload", maybeText],
+        ["Packed state bytes", hex(displayFlags).replaceAll("\n", " ")],
+        ["State flags", `0x${state.toString(16).padStart(8, "0").toUpperCase()}`],
+        ["Main state", state & 0x0f],
+        ["Secondary states", `0x${((state >>> 4) & 0x1ff).toString(16).toUpperCase()}`],
+        ["Display-image flags", `0x${((state >>> 13) & 0x7ff).toString(16).toUpperCase()}`],
+        ["Previous screen", (state >>> 24) & 0x0f],
+        ["Wi-Fi / cloud / custom text", `${(state & (1 << 28)) !== 0 ? "connected" : "off"} / ${(state & (1 << 29)) !== 0 ? "connected" : "off"} / ${(state & (1 << 30)) !== 0 ? "enabled" : "off"}`],
+        ["Excluded by design", "Time, device and network details, custom text and style"],
+      ],
+    };
+  }
+
   const raw = bytes.length === 37 ? bytes : decodeBase64Url(maybeText);
   if (!raw || raw.length !== 37 || raw[0] !== 1 || raw[1] > 16) return null;
 
@@ -111,7 +150,8 @@ function displayPacket(bytes) {
   const firmware = Array.from(raw.subarray(32, 35), (part) => part === 255 ? "unavailable" : part === 254 ? "overflow" : String(part)).join(".");
   const rssi = raw[26] > 127 ? raw[26] - 256 : raw[26];
   return {
-    crcValid: actualCrc === expectedCrc,
+    statusText: actualCrc === expectedCrc ? "Legacy CRC valid" : "Legacy CRC invalid",
+    statusTone: actualCrc === expectedCrc ? "success" : "error",
     fields: [
       ["Format version", raw[0]],
       ["Device name", textDecoder.decode(raw.subarray(2, 2 + raw[1])) || "—"],
@@ -135,14 +175,14 @@ function showPacket(bytes) {
   const packet = displayPacket(bytes);
   decodedFields.replaceChildren();
   if (!packet) {
-    setStatus(packetStatus, "Not a device v1 packet", "idle");
+    setStatus(packetStatus, "Not a device packet", "idle");
     const detail = document.createElement("p");
     detail.className = "packet-note";
-    detail.textContent = "The raw bytes are preserved above. device parsing expects a 37-byte packet or its 50-character Base64URL representation.";
+    detail.textContent = "The raw bytes are preserved above. device parsing expects the six-character Base45 display-flags payload; legacy 37-byte and 50-character Base64URL packets are also supported.";
     decodedFields.append(detail);
     return;
   }
-  setStatus(packetStatus, packet.crcValid ? "CRC valid" : "CRC invalid", packet.crcValid ? "success" : "error");
+  setStatus(packetStatus, packet.statusText, packet.statusTone);
   for (const [label, value] of packet.fields) {
     const term = document.createElement("dt");
     term.textContent = label;
