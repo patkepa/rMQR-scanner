@@ -19,6 +19,7 @@ const scanCanvas = document.createElement("canvas");
 const scanContext = scanCanvas.getContext("2d", { willReadFrequently: true });
 const textDecoder = new TextDecoder("utf-8", { fatal: false });
 const textEncoder = new TextEncoder();
+const TEMPORAL_FRAME_COUNT = 4;
 const readerOptions = {
   formats: ["RMQRCode"],
   tryHarder: true,
@@ -34,6 +35,10 @@ let scanning = false;
 let scanBusy = false;
 let scanTimer;
 let lastPayload = "";
+let temporalPixels;
+let temporalWidth = 0;
+let temporalHeight = 0;
+let temporalFrameCount = 0;
 
 function setStatus(element, text, tone = "idle") {
   element.textContent = text;
@@ -169,6 +174,39 @@ async function decodeInput(input) {
   return results.length > 0;
 }
 
+function resetTemporalFrame() {
+  temporalPixels = undefined;
+  temporalWidth = 0;
+  temporalHeight = 0;
+  temporalFrameCount = 0;
+}
+
+function addTemporalFrame(frame) {
+  if ((temporalPixels === undefined) ||
+     (temporalWidth !== frame.width) || (temporalHeight !== frame.height)) {
+    temporalPixels = new Uint8ClampedArray(frame.data);
+    temporalWidth = frame.width;
+    temporalHeight = frame.height;
+    temporalFrameCount = 1;
+    return null;
+  }
+
+  for (let index = 0; index < temporalPixels.length; index += 4) {
+    temporalPixels[index] = Math.max(temporalPixels[index], frame.data[index]);
+    temporalPixels[index + 1] = Math.max(temporalPixels[index + 1], frame.data[index + 1]);
+    temporalPixels[index + 2] = Math.max(temporalPixels[index + 2], frame.data[index + 2]);
+    temporalPixels[index + 3] = 255;
+  }
+  temporalFrameCount += 1;
+  if (temporalFrameCount < TEMPORAL_FRAME_COUNT) return null;
+
+  const combined = new ImageData(new Uint8ClampedArray(temporalPixels),
+                                 temporalWidth,
+                                 temporalHeight);
+  resetTemporalFrame();
+  return combined;
+}
+
 function cameraFrame() {
   if (!scanning || scanBusy || camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
   const sourceWidth = camera.videoWidth;
@@ -179,7 +217,14 @@ function cameraFrame() {
   scanCanvas.width = Math.max(1, Math.floor(sourceWidth * scale));
   scanCanvas.height = Math.max(1, Math.floor(sourceHeight * scale));
   scanContext.drawImage(camera, 0, 0, scanCanvas.width, scanCanvas.height);
-  decodeInput(scanContext.getImageData(0, 0, scanCanvas.width, scanCanvas.height))
+  const combinedFrame = addTemporalFrame(
+    scanContext.getImageData(0, 0, scanCanvas.width, scanCanvas.height));
+  if (combinedFrame === null) {
+    setCameraStatus(`Averaging LED frames (${temporalFrameCount}/${TEMPORAL_FRAME_COUNT})`, "active");
+    scanBusy = false;
+    return;
+  }
+  decodeInput(combinedFrame)
     .catch(() => undefined)
     .finally(() => { scanBusy = false; });
 }
@@ -205,6 +250,7 @@ async function startCamera() {
     camera.srcObject = stream;
     await camera.play();
     scanning = true;
+    resetTemporalFrame();
     cameraEmpty.hidden = true;
     startCameraButton.innerHTML = "<span aria-hidden=\"true\">■</span> Stop camera";
     setCameraStatus("Scanning rMQR", "active");
@@ -220,6 +266,7 @@ async function startCamera() {
 
 function stopCamera() {
   scanning = false;
+  resetTemporalFrame();
   window.clearInterval(scanTimer);
   stream?.getTracks().forEach((track) => track.stop());
   stream = undefined;

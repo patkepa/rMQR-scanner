@@ -5,6 +5,11 @@ uses ZXing-C++ WebAssembly to scan only `RMQRCode` symbols and displays the
 decoder's raw `bytes` buffer, hex, Base64URL, decoded text, and device v1
 diagnostic fields.
 
+For PWM/row-scanned LED panels, the live scanner combines the brightest pixel
+from four consecutive camera frames before decoding. This restores LED rows
+that a rolling-shutter camera captured while they were off. Keep the phone
+still for about one second while it collects the frames.
+
 ## device format
 
 Current device firmware emits an unpadded 50-character Base64URL string.
